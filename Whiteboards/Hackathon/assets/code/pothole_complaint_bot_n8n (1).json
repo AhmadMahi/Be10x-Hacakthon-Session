@@ -1,0 +1,695 @@
+{
+  "name": "Pothole Complaint Bot (Telegram + AI + Google Sheets)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        400
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalise any incoming Telegram message into one clean object\nconst msg = $input.first().json.message || {};\nconst text = (msg.text || msg.caption || '').trim();\nconst chatId = msg.chat ? msg.chat.id : null;\nconst from = msg.from || {};\nconst reporter = [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Unknown';\nconst photoFileId = Array.isArray(msg.photo) && msg.photo.length ? msg.photo[msg.photo.length - 1].file_id : '';\n\nlet route = 'complaint';\nlet ticketQuery = '';\nif (/^\\/(start|help)/i.test(text)) {\n  route = 'help';\n} else if (/^\\/status/i.test(text)) {\n  ticketQuery = text.replace(/^\\/status\\s*/i, '').trim().toUpperCase();\n  route = /^PTH-\\d{8}-\\d{4}$/.test(ticketQuery) ? 'status' : 'help';\n} else if (!text && photoFileId) {\n  route = 'need_details';\n} else if (text.length < 15) {\n  route = 'need_details';\n}\nconst detailMsg = (!text && photoFileId)\n  ? 'Thanks for the photo. A description is required to file a complaint. Please send the photo again with a caption, or send a text message, describing the problem and its exact location (street, landmark, area, city).'\n  : 'Your message is too short to file a complaint. Please describe the road problem and its exact location (street, landmark, area, city) in one message. A photo is optional. Send /help for an example.';\n\nconst systemPrompt = [\n  'You are a municipal road-complaint intake assistant.',\n  'Extract details from a citizen message about a road problem.',\n  'Return ONLY a JSON object with these keys:',\n  'is_pothole_report (boolean: true only if the message reports a road surface problem),',\n  'description (string, cleaned-up description in plain English),',\n  'location_text (string: street, landmark, area and city exactly as given; empty string if no location is given),',\n  'severity (one of: low, medium, high),',\n  'hazard_type (one of: pothole, waterlogged_pothole, open_manhole, road_cave_in, other),',\n  'ai_summary (string, max 20 words),',\n  'missing_info (array of strings describing what is missing, empty if nothing).',\n  'Severity rules: high if the message mentions an accident, injury, a vehicle fall, an open manhole, a cave-in, or a location near a school or hospital;',\n  'medium if it blocks or slows traffic or is large or deep; low otherwise.',\n  'Never invent a location, landmark, or detail that is not in the message.',\n  'Use only the text description. Do not assume anything about any photo.',\n  'The message may be in English, Hindi, or Hinglish. Always answer in English.'\n].join(' ');\n\nreturn [{ json: {\n  route,\n  chat_id: chatId,\n  reporter,\n  text,\n  ticket_query: ticketQuery,\n  photo_file_id: photoFileId,\n  has_photo: Boolean(photoFileId),\n  detail_msg: detailMsg,\n  ai_body: {\n    model: 'gpt-4o-mini',\n    temperature: 0,\n    response_format: { type: 'json_object' },\n    messages: [\n      { role: 'system', content: systemPrompt },\n      { role: 'user', content: text }\n    ]\n  }\n}}];"
+      },
+      "name": "Normalize Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        400
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000002"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "help",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "help"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "status",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "need_details",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "need_details"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "complaint",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "complaint"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Route Message",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        400
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000003"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=Welcome to the Pothole Complaint Bot.\n\nTo file a complaint, send ONE text message describing:\n1. The problem (size, danger, traffic impact)\n2. The exact location (street, landmark, area, city)\n\nPhoto is optional. If you add one, write the description as the photo caption.\n\nExample: Big pothole near Gandhi Maidan gate 3, Patna. Two bikes slipped yesterday.\n\nTo check progress, send: /status PTH-YYYYMMDD-NNNN",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        700,
+        60
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000004"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Complaints",
+          "mode": "name"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "ticket_id",
+              "lookupValue": "={{ $json.ticket_query }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Lookup Ticket",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        700,
+        240
+      ],
+      "alwaysOutputData": true,
+      "id": "a1b2c3d4-0000-4000-8000-000000000005"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Find the ticket and format a status reply\nconst q = $('Normalize Message').first().json.ticket_query;\nconst chatId = $('Normalize Message').first().json.chat_id;\nconst rows = $input.all().map(i => i.json).filter(r => String(r.ticket_id || '').toUpperCase() === q);\n\nlet text;\nif (!rows.length) {\n  text = 'No complaint found with ID ' + q + '. Please check the ID and try again.';\n} else {\n  const r = rows[rows.length - 1];\n  text = 'Complaint ' + r.ticket_id + '\\n'\n    + 'Status: ' + (r.status || 'Open') + '\\n'\n    + 'Severity: ' + r.severity + '\\n'\n    + 'Location: ' + r.location_text + '\\n'\n    + 'Filed on: ' + r.created_at\n    + (r.officer_note ? '\\nOfficer note: ' + r.officer_note : '');\n}\nreturn [{ json: { chat_id: chatId, text } }];"
+      },
+      "name": "Format Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        240
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000006"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1140,
+        240
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000007"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "={{ $json.detail_msg }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Ask For Details",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        700,
+        420
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000008"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.ai_body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "AI Extract Complaint",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        620
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "id": "a1b2c3d4-0000-4000-8000-000000000009"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the AI output, validate it, and build the ticket row\nconst src = $('Normalize Message').first().json;\nlet ai = {};\ntry {\n  ai = JSON.parse($input.first().json.choices[0].message.content);\n} catch (e) {\n  ai = { is_pothole_report: false, missing_info: ['The message could not be understood'] };\n}\n\nconst severity = ['low', 'medium', 'high'].includes(ai.severity) ? ai.severity : 'medium';\nconst hazards = ['pothole', 'waterlogged_pothole', 'open_manhole', 'road_cave_in', 'other'];\nconst hazardType = hazards.includes(ai.hazard_type) ? ai.hazard_type : 'other';\nconst locationText = String(ai.location_text || '').trim();\n\nconst reasons = [];\nif (ai.is_pothole_report !== true) reasons.push('This does not look like a road or pothole complaint');\nif (locationText.length < 3) reasons.push('Location is missing (street, landmark, area, city)');\nif (Array.isArray(ai.missing_info)) {\n  for (const m of ai.missing_info) if (m && !reasons.includes(m)) reasons.push(String(m));\n}\nconst valid = ai.is_pothole_report === true && locationText.length >= 3;\n\n// Ticket ID in Indian Standard Time: PTH-YYYYMMDD-NNNN\nconst now = new Date();\nconst ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);\nconst ymd = ist.toISOString().slice(0, 10).replace(/-/g, '');\nconst ticketId = 'PTH-' + ymd + '-' + String(Math.floor(1000 + Math.random() * 9000));\n\nreturn [{ json: {\n  valid,\n  reasons,\n  row: {\n    ticket_id: ticketId,\n    created_at: now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }),\n    chat_id: String(src.chat_id),\n    reporter: src.reporter,\n    description: String(ai.description || src.text).slice(0, 500),\n    location_text: locationText,\n    maps_link: locationText ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(locationText) : '',\n    severity,\n    hazard_type: hazardType,\n    ai_summary: String(ai.ai_summary || '').slice(0, 200),\n    status: 'Open',\n    photo_file_id: src.photo_file_id\n  }\n}}];"
+      },
+      "name": "Validate & Build Ticket",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        620
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000010"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "526dih3z",
+              "leftValue": "={{ $json.valid }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Is Valid Complaint?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        620
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000011"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Complaints",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "ticket_id": "={{ $json.row.ticket_id }}",
+            "created_at": "={{ $json.row.created_at }}",
+            "chat_id": "={{ $json.row.chat_id }}",
+            "reporter": "={{ $json.row.reporter }}",
+            "description": "={{ $json.row.description }}",
+            "location_text": "={{ $json.row.location_text }}",
+            "maps_link": "={{ $json.row.maps_link }}",
+            "severity": "={{ $json.row.severity }}",
+            "hazard_type": "={{ $json.row.hazard_type }}",
+            "ai_summary": "={{ $json.row.ai_summary }}",
+            "status": "={{ $json.row.status }}",
+            "photo_file_id": "={{ $json.row.photo_file_id }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "ticket_id",
+              "displayName": "ticket_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reporter",
+              "displayName": "reporter",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "description",
+              "displayName": "description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "location_text",
+              "displayName": "location_text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "maps_link",
+              "displayName": "maps_link",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "severity",
+              "displayName": "severity",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hazard_type",
+              "displayName": "hazard_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ai_summary",
+              "displayName": "ai_summary",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "photo_file_id",
+              "displayName": "photo_file_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1380,
+        540
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000012"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Validate & Build Ticket').item.json.row.chat_id }}",
+        "text": "=Complaint registered. Thank you!\n\nTicket ID: {{ $('Validate & Build Ticket').item.json.row.ticket_id }}\nLocation: {{ $('Validate & Build Ticket').item.json.row.location_text }}\nSeverity: {{ $('Validate & Build Ticket').item.json.row.severity }}\nSummary: {{ $('Validate & Build Ticket').item.json.row.ai_summary }}\nPhoto: {{ $('Validate & Build Ticket').item.json.row.photo_file_id ? 'Attached' : 'Not provided (optional)' }}\n\nCheck progress anytime: /status {{ $('Validate & Build Ticket').item.json.row.ticket_id }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Confirm to Citizen",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1620,
+        440
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000013"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "vvlc75hh",
+              "leftValue": "={{ $('Validate & Build Ticket').item.json.row.severity }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              },
+              "rightValue": "high"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Is High Severity?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1620,
+        640
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000014"
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_OFFICER_GROUP_CHAT_ID",
+        "text": "=URGENT ROAD HAZARD\n\nTicket: {{ $('Validate & Build Ticket').item.json.row.ticket_id }}\nType: {{ $('Validate & Build Ticket').item.json.row.hazard_type }}\nLocation: {{ $('Validate & Build Ticket').item.json.row.location_text }}\nMap: {{ $('Validate & Build Ticket').item.json.row.maps_link }}\nDetails: {{ $('Validate & Build Ticket').item.json.row.description }}\nPhoto: {{ $('Validate & Build Ticket').item.json.row.photo_file_id ? 'Attached (file ID in sheet)' : 'Not provided' }}\nReported by: {{ $('Validate & Build Ticket').item.json.row.reporter }} at {{ $('Validate & Build Ticket').item.json.row.created_at }}\n\nAI-assessed severity. Please verify on site and update the status in the sheet.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Alert Officers",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1860,
+        620
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000015"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Normalize Message').first().json.chat_id }}",
+        "text": "=We could not file this complaint yet.\n\nWhat we need:\n{{ $json.reasons.map(r => '- ' + r).join('\\n') }}\n\nPlease send one message with the problem and the exact location. A photo is optional. Send /help for an example.",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Request More Info",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1380,
+        760
+      ],
+      "id": "a1b2c3d4-0000-4000-8000-000000000016"
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Message": {
+      "main": [
+        [
+          {
+            "node": "Route Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route Message": {
+      "main": [
+        [
+          {
+            "node": "Send Help",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Lookup Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ask For Details",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Extract Complaint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lookup Ticket": {
+      "main": [
+        [
+          {
+            "node": "Format Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Status": {
+      "main": [
+        [
+          {
+            "node": "Send Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extract Complaint": {
+      "main": [
+        [
+          {
+            "node": "Validate & Build Ticket",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Build Ticket": {
+      "main": [
+        [
+          {
+            "node": "Is Valid Complaint?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Valid Complaint?": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Request More Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Confirm to Citizen",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Is High Severity?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is High Severity?": {
+      "main": [
+        [
+          {
+            "node": "Alert Officers",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
